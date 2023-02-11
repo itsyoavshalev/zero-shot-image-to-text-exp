@@ -139,9 +139,11 @@ class CLIPTextGenerator:
     #         features = features / features.norm(dim=-1, keepdim=True)
     #         return features.detach()
 
-    def run(self, image_features, clip_images, cond_text, beam_size):
+    def run(self, image_features, image_features_exp, clip_images, cond_text, beam_size):
         self.image_features_raw = image_features
+        self.image_features_exp = image_features_exp
         self.clip_images = clip_images
+        self.logit_scale = self.clip_exp.logit_scale.exp()
         # self.exp_model, _ = exp_clip.load("ViT-B/32", device=self.device, jit=False)
 
         context_tokens = self.lm_tokenizer.encode(self.context_prefix + cond_text)
@@ -369,6 +371,7 @@ class CLIPTextGenerator:
             if p_.grad is not None:
                 p_.grad.data.zero_()
 
+        use_exp = True
         top_size = 512
         _, top_indices = probs.topk(top_size, -1)
 
@@ -376,47 +379,45 @@ class CLIPTextGenerator:
 
         clip_loss = 0
         losses = []
-        use_exp = False
+        
         for idx_p in range(probs.shape[0]):
             top_texts = []
             prefix_text = prefix_texts[idx_p]
             for x in top_indices[idx_p]:
                 top_texts.append(prefix_text + self.lm_tokenizer.decode(x))
 
+            cur_clip_loss = 0
             if not use_exp:
-                cur_clip_loss = 0
                 with torch.no_grad():
-                    text_features = self.get_txt_features(self.clip_exp, top_texts)
+                    text_features = self.get_txt_features(self.clip_raw, top_texts)
             else:
-                image_features_exp, _ = self.get_img_feature(self.clip_exp, [self.img_path], None)
                 text_features = self.get_txt_features(self.clip_exp, top_texts)
                 heatmaps = []
-
-                logit_scale = self.clip_exp.logit_scale.exp()
-                logits_per_image = logit_scale * image_features_exp @ text_features.t()
-                logits_per_text = logits_per_image.t()
+                logits_per_text = (self.logit_scale * self.image_features_exp @ text_features.t()).t()
                 for y in range(logits_per_text.shape[0]):
-                    tmp_norm_image_relevance, _ = generate_heatmap(logits_per_text[y:(y+1)], self.clip_images.shape[0], self.clip_exp, self.device, True)
+                    tmp_norm_image_relevance = generate_heatmap(logits_per_text[y:(y+1)], self.clip_images.shape[0], self.clip_exp, self.device, True)
                     heatmaps.append(tmp_norm_image_relevance.detach())
                 
                 heatmaps = torch.cat(heatmaps)
                 heatmaps = heatmaps.expand(heatmaps.shape[0],3, *heatmaps.shape[2:])
                 
+                text_features = text_features.detach()
                 similiraties_exp = []
                 with torch.no_grad():
                     cropped_images = self.clip_images * heatmaps
-                    heatmaps = None
-                    cropped_features = self.clip_exp.encode_image(cropped_images)#.float()
-                    cropped_images = None
+                    cropped_features = self.clip_raw.encode_image(cropped_images)#.float()
                     cropped_features = cropped_features / cropped_features.norm(dim=-1, keepdim=True)
                     for tmp_i in range(cropped_features.shape[0]):
                         tmp_sim = (cropped_features[tmp_i:(tmp_i+1)] @ text_features[tmp_i:(tmp_i+1)].T)
                         similiraties_exp.append(tmp_sim)
-                    cropped_features = None
                     similiraties_exp = torch.cat(similiraties_exp)[:, 0]
                     target_probs = nn.functional.softmax(similiraties_exp / self.clip_loss_temperature, dim=-1).detach()
                     target_probs = target_probs.type(torch.float32)
+                    
                     similiraties_exp = None
+                    cropped_images = None
+                    heatmaps = None
+                    cropped_features = None
 
                 target = torch.zeros_like(probs[idx_p])
                 target[top_indices[idx_p]] = target_probs

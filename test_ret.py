@@ -78,4 +78,4 @@ def generate_heatmap(logits_per_text, batch_size, model, device, detach):
         # norm_image_relevance = image_relevance.view(tshape)
         norm_image_relevance = (image_relevance - min_v) / (max_v - min_v)
 
-    return norm_image_relevance, raw_image_relevance
+    return norm_image_relevance

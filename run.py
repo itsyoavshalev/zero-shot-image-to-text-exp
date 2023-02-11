@@ -55,8 +55,8 @@ def run(args, img_path):
 
     with torch.no_grad():
         image_features, clip_images = text_generator.get_img_feature(text_generator.clip_raw, [img_path], None)
-        text_generator.img_path = img_path
-    captions = text_generator.run(image_features, clip_images, args.cond_text, beam_size=args.beam_size)
+    image_features_exp, _ = text_generator.get_img_feature(text_generator.clip_exp, [img_path], None)
+    captions = text_generator.run(image_features, image_features_exp, clip_images, args.cond_text, beam_size=args.beam_size)
 
     encoded_captions = [text_generator.clip_raw.encode_text(clip.tokenize(c).to(text_generator.device)) for c in captions]
     encoded_captions = [x / x.norm(dim=-1, keepdim=True) for x in encoded_captions]
