@@ -53,10 +53,12 @@ def run(args, img_path):
     else:
         text_generator = CLIPTextGenerator(**vars(args))
 
-    image_features = text_generator.get_img_feature([img_path], None)
-    captions = text_generator.run(image_features, args.cond_text, beam_size=args.beam_size)
+    with torch.no_grad():
+        image_features, clip_images = text_generator.get_img_feature(text_generator.clip_raw, [img_path], None)
+        text_generator.img_path = img_path
+    captions = text_generator.run(image_features, clip_images, args.cond_text, beam_size=args.beam_size)
 
-    encoded_captions = [text_generator.clip.encode_text(clip.tokenize(c).to(text_generator.device)) for c in captions]
+    encoded_captions = [text_generator.clip_raw.encode_text(clip.tokenize(c).to(text_generator.device)) for c in captions]
     encoded_captions = [x / x.norm(dim=-1, keepdim=True) for x in encoded_captions]
     best_clip_idx = (torch.cat(encoded_captions) @ image_features.t()).squeeze().argmax().item()
 
