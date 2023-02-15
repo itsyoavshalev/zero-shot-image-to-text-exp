@@ -98,12 +98,9 @@ class CLIPTextGenerator:
         self.ef_idx = 1
         self.forbidden_factor = forbidden_factor
 
-    def get_img_feature(self, model, img_path, weights):
-        imgs = [Image.open(x) for x in img_path]
-        clip_imgs = [self.clip_preprocess(x).unsqueeze(0).to(self.device) for x in imgs]
-
+    def get_img_feature(self, model, weights, clip_imgs=None):
         # with torch.no_grad():
-        image_fts = [model.encode_image(x) for x in clip_imgs]
+        image_fts = [model.encode_image(x.unsqueeze(0)) for x in clip_imgs]
 
         if weights is not None:
             image_features = sum([x * weights[i] for i, x in enumerate(image_fts)])
@@ -111,8 +108,8 @@ class CLIPTextGenerator:
             image_features = sum(image_fts)
 
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-        clip_imgs = torch.stack(clip_imgs)[:, 0]
-        return image_features, clip_imgs
+        # clip_imgs = torch.stack(clip_imgs)[:, 0]
+        return image_features
 
     def get_txt_features(self, model, text):
         clip_texts = exp_clip.tokenize(text).to(self.device)
@@ -372,7 +369,7 @@ class CLIPTextGenerator:
                 p_.grad.data.zero_()
 
         use_exp = True
-        top_size = 512
+        top_size = 350
         _, top_indices = probs.topk(top_size, -1)
 
         prefix_texts = [self.lm_tokenizer.decode(x).replace(self.lm_tokenizer.bos_token, '') for x in context_tokens]

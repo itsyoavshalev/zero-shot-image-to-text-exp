@@ -3,10 +3,19 @@ import torch
 import clip
 from model.ZeroCLIP import CLIPTextGenerator
 from model.ZeroCLIP_batched import CLIPTextGenerator as CLIPTextGenerator_multigpu
+import os
+import shutil
+from data_loader import ImagesDataset
+from datetime import datetime
+from tqdm import tqdm
+import json
 
 def get_args():
     parser = argparse.ArgumentParser()
-
+    parser.add_argument('--data_path', type=str, default='/mnt/sb/datasets/COCO/val2014/')
+    parser.add_argument("--filter_json_path", type=str, default='/mnt/sb/datasets/COCO/dataset_coco_karpathy.json', help="json to filter db items, e.g karpathy split")
+    parser.add_argument("--db_start_idx", type=int, default=0)
+    parser.add_argument("--db_num_images", type=int, default=5000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--lm_model", type=str, default="gpt-2", help="gpt-2 or gpt-neo")
     parser.add_argument("--clip_checkpoints", type=str, default="./clip_checkpoints", help="path to CLIP")
@@ -53,17 +62,37 @@ def run(args, img_path):
     else:
         text_generator = CLIPTextGenerator(**vars(args))
 
-    with torch.no_grad():
-        image_features, clip_images = text_generator.get_img_feature(text_generator.clip_raw, [img_path], None)
-    image_features_exp, _ = text_generator.get_img_feature(text_generator.clip_exp, [img_path], None)
-    captions = text_generator.run(image_features, image_features_exp, clip_images, args.cond_text, beam_size=args.beam_size)
+    dataset = ImagesDataset(args.data_path, text_generator.clip_preprocess, start_index=args.db_start_idx, count=args.db_num_images, filter_json_path=args.filter_json_path)
+    dataloader = torch.utils.data.DataLoader(dataset=dataset, batch_size=1, shuffle=False, num_workers=1)
+    results = []
+    results_base_path = './results_' + datetime.now().strftime("%d%m-%H%M%S") + '/'
+    results_inputs_base_path = results_base_path + 'inputs/'
+    results_path = results_base_path + 'results.json'
+    if os.path.isdir(results_base_path):
+        shutil.rmtree(results_base_path)
+    os.makedirs(results_base_path, exist_ok=True)
+    os.makedirs(results_inputs_base_path, exist_ok=True)
+    for idx, current_data in tqdm(enumerate(dataloader)):
+        clip_images = current_data['images'].to(text_generator.device)[0]
+        db_item_ids = current_data['ids']
+        with torch.no_grad():
+            image_features = text_generator.get_img_feature(text_generator.clip_raw, None, clip_imgs=clip_images)
+        image_features_exp = text_generator.get_img_feature(text_generator.clip_exp, None, clip_imgs=clip_images)
+        captions = text_generator.run(image_features, image_features_exp, clip_images, args.cond_text, beam_size=args.beam_size)
 
-    encoded_captions = [text_generator.clip_raw.encode_text(clip.tokenize(c).to(text_generator.device)) for c in captions]
-    encoded_captions = [x / x.norm(dim=-1, keepdim=True) for x in encoded_captions]
-    best_clip_idx = (torch.cat(encoded_captions) @ image_features.t()).squeeze().argmax().item()
+        encoded_captions = [text_generator.clip_raw.encode_text(clip.tokenize(c).to(text_generator.device)) for c in captions]
+        encoded_captions = [x / x.norm(dim=-1, keepdim=True) for x in encoded_captions]
+        best_clip_idx = (torch.cat(encoded_captions) @ image_features.t()).squeeze().argmax().item()
 
-    print(captions)
-    print('best clip:', args.cond_text + captions[best_clip_idx])
+        print(captions)
+        print('best clip:', args.cond_text + captions[best_clip_idx])
+
+        all_captions = ' # '.join(captions)
+        results.append({"id": db_item_ids[0][0],
+                        "best_clip_res": captions[best_clip_idx],
+                        "captions": all_captions})
+        with open(results_path, 'w') as f:
+            json.dump(results, f)
 
 def run_arithmetic(args, imgs_path, img_weights):
     if args.multi_gpu:
