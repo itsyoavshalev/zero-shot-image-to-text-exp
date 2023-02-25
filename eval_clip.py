@@ -9,12 +9,14 @@ import os
 import json
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, RandomResizedCrop
 import clip
+from test_ret import generate_heatmap
+from CLIP import clip as exp_clip
 
 def convert_models_to_fp32(model):
     for p in model.parameters():
         p.data = p.data.float()
 
-candidates_json = '/mnt/sb/zero-shot-image-to-text-exp/results_1502-230824/results.json'
+candidates_json = '/mnt/sb/zero-shot-image-to-text-exp/results_2002-222914/results.json'
 print(candidates_json)
 
 image_dir = '/mnt/sb/datasets/COCO/val2014/'
@@ -22,8 +24,12 @@ references_json = '/mnt/sb/datasets/COCO/dataset_coco_karpathy.json'
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(device)
+use_masks = True
 
-model, transform = clip.load('ViT-B/32', device=device, download_root='./clip_checkpoints', jit=False)
+if not use_masks:
+    model, transform = clip.load('ViT-B/32', device=device, download_root='./clip_checkpoints', jit=False)
+else:
+    model, transform = exp_clip.load("ViT-B/32", device=device, jit=False)
 convert_models_to_fp32(model)
 
 model.to(device)
@@ -71,35 +77,27 @@ def extract_all_captions(captions, model, device, batch_size=256, num_workers=8)
         CLIPCapDataset(captions),
         batch_size=batch_size, num_workers=num_workers, shuffle=False)
     all_text_features = []
-    with torch.no_grad():
-        for b in tqdm(data):
-            b = b['caption'].to(device)
-            all_text_features.append(model.encode_text(b).cpu().numpy())
-    all_text_features = np.vstack(all_text_features)
+    # with torch.no_grad():
+    for b in data:
+        b = b['caption'].to(device)
+        all_text_features.append(model.encode_text(b))
+    all_text_features = torch.cat(all_text_features)
     return all_text_features
 
 
-def extract_all_images(images, model, device, batch_size=64, num_workers=8):
+def extract_all_images(images, model, device, batch_size=64, num_workers=8, heatmaps=None):
     data = torch.utils.data.DataLoader(
         CLIPImageDataset(images, transform),
         batch_size=batch_size, num_workers=num_workers, shuffle=False)
     all_image_features = []
-    with torch.no_grad():
-        for b in tqdm(data):
-            b = b['image'].to(device)
-            all_image_features.append(model.encode_image(b).cpu().numpy())
-    all_image_features = np.vstack(all_image_features)
+    # with torch.no_grad():
+    for i, b in enumerate(data):
+        b = b['image'].to(device)
+        if heatmaps is not None:
+            b = b * (heatmaps[i:(i+1)].to(b.device))
+        all_image_features.append(model.encode_image(b))
+    all_image_features = torch.cat(all_image_features)
     return all_image_features
-
-
-def get_clip_score(model, images, candidates, device, w=2.5):
-    candidates = extract_all_captions(candidates, model, device)
-
-    images = images / np.sqrt(np.sum(images**2, axis=1, keepdims=True))
-    candidates = candidates / np.sqrt(np.sum(candidates**2, axis=1, keepdims=True))
-
-    per = w*np.clip(np.sum(images * candidates, axis=1), 0, None)
-    return np.mean(per), per, candidates
 
 
 def get_refonlyclipscore(model, references, candidates, device):
@@ -109,9 +107,11 @@ def get_refonlyclipscore(model, references, candidates, device):
         flattened_refs.extend(refs)
         flattened_refs_idxs.extend([idx for _ in refs])
 
-    flattened_refs = extract_all_captions(flattened_refs, model, device)
+    with torch.no_grad():
+        flattened_refs = extract_all_captions(flattened_refs, model, device)
 
-    flattened_refs = flattened_refs / np.sqrt(np.sum(flattened_refs**2, axis=1, keepdims=True))
+    flattened_refs = flattened_refs / (flattened_refs**2).sum(axis=1, keepdims=True).sqrt()
+    flattened_refs = flattened_refs.cpu().numpy()
 
     cand_idx2refs = collections.defaultdict(list)
     for ref_feats, cand_idx in zip(flattened_refs, flattened_refs_idxs):
@@ -122,7 +122,7 @@ def get_refonlyclipscore(model, references, candidates, device):
     cand_idx2refs = {k: np.vstack(v) for k, v in cand_idx2refs.items()}
 
     per = []
-    for c_idx, cand in tqdm(enumerate(candidates)):
+    for c_idx, cand in enumerate(candidates):
         cur_refs = cand_idx2refs[c_idx]
         all_sims = cand.dot(cur_refs.transpose())
         per.append(np.max(all_sims))
@@ -131,8 +131,12 @@ def get_refonlyclipscore(model, references, candidates, device):
 
 
 def main():
+    w=2.5
+    num_cands = 1598
+    
     with open(candidates_json) as f:
         tmp_candidates = json.load(f)
+        tmp_candidates = tmp_candidates[:num_cands]
         
     if references_json:
         with open(references_json) as f:
@@ -161,35 +165,50 @@ def main():
             references.append(ref_dict[file_suffix])
 
     print(len(candidates))
-    
-    image_feats = extract_all_images(
-        image_paths, model, device, batch_size=64, num_workers=8)
 
-    # get image-text clipscore
-    _, per_instance_image_text, candidate_feats = get_clip_score(
-        model, image_feats, candidates, device)
-
-    if references_json:
-        # get text-text clipscore
-        _, per_instance_text_text = get_refonlyclipscore(
-            model, references, candidate_feats, device)
+    image_feats = []
+    candidate_feats = []
+    logits_per_text = []
+    for y in tqdm(range(len(candidates))):
+        tmp_image_feats = extract_all_images(image_paths[y:(y+1)], model, device, batch_size=64, num_workers=8)
+        tmp_image_feats = tmp_image_feats / tmp_image_feats.norm(dim=-1, keepdim=True)
         
-        # F-score
-        refclipscores = 2 * per_instance_image_text * per_instance_text_text / (per_instance_image_text + per_instance_text_text)
+        tmp_candidate_feats = extract_all_captions(candidates[y:(y+1)], model, device)
+        tmp_candidate_feats = tmp_candidate_feats / tmp_candidate_feats.norm(dim=-1, keepdim=True)
+        candidate_feats.append(tmp_candidate_feats.detach().cpu())
 
-        scores = {image_id: {'CLIPScore': float(clipscore), 'RefCLIPScore': float(refclipscore)}
-                  for image_id, clipscore, refclipscore in
-                  zip(image_ids, per_instance_image_text, refclipscores)}
+        tmp_logits_per_text = (model.logit_scale.exp() * tmp_image_feats @ tmp_candidate_feats.t()).t()
+        
+        if use_masks:
+            tmp_norm_image_relevance = generate_heatmap(tmp_logits_per_text, 1, model, device, True)
+            heatmap = tmp_norm_image_relevance.detach().cpu()
+            heatmap = heatmap.expand(heatmap.shape[0],3, *heatmap.shape[2:])
+            tmp_image_feats = extract_all_images(image_paths[y:(y+1)], model, device, batch_size=64, num_workers=8, heatmaps=heatmap)
+            tmp_image_feats = tmp_image_feats / tmp_image_feats.norm(dim=-1, keepdim=True)
+            tmp_logits_per_text = (model.logit_scale.exp() * tmp_image_feats @ tmp_candidate_feats.t()).t()
+        
+        image_feats.append(tmp_image_feats.detach().cpu())
+        logits_per_text.append(tmp_logits_per_text.detach().cpu())
 
-    else:
-        scores = {image_id: {'CLIPScore': float(clipscore)}
-                  for image_id, clipscore in
-                  zip(image_ids, per_instance_image_text)}
-        print('CLIPScore: {:.4f}'.format(np.mean([s['CLIPScore'] for s in scores.values()])))
+    image_feats = torch.cat(image_feats)
+    candidate_feats = torch.cat(candidate_feats)
+    logits_per_text = torch.cat(logits_per_text)
+    
+    per_instance_image_text = w*np.clip(np.sum(image_feats.cpu().numpy() * candidate_feats.cpu().numpy(), axis=1), 0, None)
+        
+    # get text-text clipscore
+    _, per_instance_text_text = get_refonlyclipscore(
+        model, references, candidate_feats.cpu().numpy(), device)
+    
+    # F-score
+    refclipscores = 2 * per_instance_image_text * per_instance_text_text / (per_instance_image_text + per_instance_text_text)
 
-    if references_json:
-        print('CLIPScore: {:.4f}'.format(np.mean([s['CLIPScore'] for s in scores.values()])))
-        print('RefCLIPScore: {:.4f}'.format(np.mean([s['RefCLIPScore'] for s in scores.values()])))
+    scores = {image_id: {'CLIPScore': float(clipscore), 'RefCLIPScore': float(refclipscore)}
+                for image_id, clipscore, refclipscore in
+                zip(image_ids, per_instance_image_text, refclipscores)}
+    
+    print('CLIPScore: {:.4f}'.format(np.mean([s['CLIPScore'] for s in scores.values()])))
+    print('RefCLIPScore: {:.4f}'.format(np.mean([s['RefCLIPScore'] for s in scores.values()])))
 
 
 if __name__ == '__main__':
