@@ -1,9 +1,10 @@
 import json
 
+num_cands = 1598
 results_c = []
-out_file = './results_1502-230824/results_c.json'
+out_file = './results_2002-222914/results_c.json'
 
-with open('./results_1502-230824/results.json', 'r') as jsonfile:
+with open('./results_2002-222914/results.json', 'r') as jsonfile:
     data = json.load(jsonfile)
 
 with open('/mnt/sb/datasets/annotations/captions_val2014.json', 'r') as jsonfile:
@@ -33,6 +34,7 @@ for x in data:
     results_c.append(tmp_item)
 
 print(len(results_c))
+results_c = results_c[:num_cands]
 with open(out_file, 'w') as f:
     json.dump(results_c, f)
 
