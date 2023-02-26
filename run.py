@@ -5,7 +5,8 @@ from model.ZeroCLIP import CLIPTextGenerator
 from model.ZeroCLIP_batched import CLIPTextGenerator as CLIPTextGenerator_multigpu
 import os
 import shutil
-from data_loader import ImagesDataset
+from coco_data_loader import ImagesDataset
+from flickr_data_loader import FlickrDataset
 from datetime import datetime
 from tqdm import tqdm
 import json
@@ -21,8 +22,7 @@ def get_args():
     parser.add_argument("--clip_checkpoints", type=str, default="./clip_checkpoints", help="path to CLIP")
     parser.add_argument("--target_seq_length", type=int, default=15)
     parser.add_argument("--cond_text", type=str, default="Image of a")
-    parser.add_argument("--reset_context_delta", action="store_true",
-                        help="Should we reset the context at each token gen")
+    # parser.add_argument("--reset_context_delta", action="store_true", help="Should we reset the context at each token gen")
     parser.add_argument("--num_iterations", type=int, default=5)
     parser.add_argument("--clip_loss_temperature", type=float, default=0.01)
     parser.add_argument("--clip_scale", type=float, default=1)
@@ -62,6 +62,7 @@ def run(args, img_path):
     else:
         text_generator = CLIPTextGenerator(**vars(args))
 
+    # dataset = FlickrDataset('/mnt/sb/datasets/flickr30k_entities/', text_generator.clip_preprocess)
     dataset = ImagesDataset(args.data_path, text_generator.clip_preprocess, start_index=args.db_start_idx, count=args.db_num_images, filter_json_path=args.filter_json_path)
     dataloader = torch.utils.data.DataLoader(dataset=dataset, batch_size=1, shuffle=False, num_workers=1)
     results = []
