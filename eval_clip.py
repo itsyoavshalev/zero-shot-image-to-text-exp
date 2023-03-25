@@ -16,11 +16,18 @@ def convert_models_to_fp32(model):
     for p in model.parameters():
         p.data = p.data.float()
 
-candidates_json = '/mnt/sb/zero-shot-image-to-text-exp/results_2002-222914/results.json'
-print(candidates_json)
+is_flickr=False
 
-image_dir = '/mnt/sb/datasets/COCO/val2014/'
-references_json = '/mnt/sb/datasets/COCO/dataset_coco_karpathy.json' 
+if not is_flickr:
+    candidates_json = '/mnt/sb/zero-shot-image-to-text-exp/results_2002-222914/results.json'
+    image_dir = '/mnt/sb/datasets/COCO/val2014/'
+    references_json = '/mnt/sb/datasets/COCO/dataset_coco_karpathy.json' 
+else:
+    candidates_json = '/mnt/sb/zero-shot-image-to-text-exp/results_2602-211100_flickr_ours/results.json'
+    image_dir = '/mnt/sb/datasets/flickr30k_entities/flickr30k_images/flickr30k_images/'
+    references_json = '/mnt/sb/datasets/flickr30k_entities/karpathy_dataset_flickr30k.json' 
+
+print(candidates_json)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(device)
@@ -41,7 +48,7 @@ class CLIPCapDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         c_data = self.data[idx]
-        c_data = clip.tokenize(c_data).squeeze()
+        c_data = clip.tokenize(c_data[:330]).squeeze()
         return {'caption': c_data}
 
     def __len__(self):
@@ -156,9 +163,15 @@ def main():
     image_ids = []
     references = []
     for c in tmp_candidates:
-        file_suffix = c['id']
-        image_paths.append(os.path.join(image_dir, file_suffix))
-        image_ids.append(int(c['id'].split('_')[-1].split('.')[0]))
+        if is_flickr:
+            img_id = c['id']
+            file_suffix = [x['filename'] for x in tmp_references['images'] if x['imgid']==img_id][0]
+            image_ids.append(img_id)
+        else:
+            file_suffix = c['id']
+            image_ids.append(int(c['id'].split('_')[-1].split('.')[0]))
+        
+        image_paths.append(os.path.join(image_dir, file_suffix))   
         candidates.append(c['best_clip_res'].strip().capitalize())
 
         if references_json:

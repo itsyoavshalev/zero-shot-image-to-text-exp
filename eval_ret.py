@@ -9,14 +9,14 @@ from tqdm import tqdm
 
 print(model_zoo)
 
-num_cands = 1598
+num_cands = 5000
 
 with open('/mnt/sb/zero-shot-image-to-text-exp/results_2002-222914/results.json', 'r') as f:
     candidates = json.load(f)
     candidates = candidates[:num_cands]
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model, vis_processors, text_processors = load_model_and_preprocess("blip_image_text_matching", "base", device=device, is_eval=True)
+model, vis_processors, text_processors = load_model_and_preprocess("blip_retrieval", model_type="coco", device=device, is_eval=True)
 
 
 results = []
@@ -37,4 +37,4 @@ for item in tqdm(candidates):
 
     results.append(itm_scores[:, 1].item())    
 
-    print(np.array(results).mean())
+print(np.array(results).mean())

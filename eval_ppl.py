@@ -9,6 +9,7 @@ import json
 def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--prediction_path", type=str, default='/mnt/sb/zero-shot-image-to-text-exp/results_2002-222914/results.json')
+    # parser.add_argument("--prediction_path", type=str, default='/mnt/sb/zero-shot-image-to-text-exp/results_2702-192814_flickr_zero/results.json')
     return parser
 
 if __name__ == '__main__':

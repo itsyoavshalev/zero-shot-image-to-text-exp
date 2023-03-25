@@ -12,7 +12,6 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
-                "--reset_context_delta",
                 "--caption_img_path", "example_images/captions/COCO_val2014_000000097017.jpg"
             ],
             "env": {
