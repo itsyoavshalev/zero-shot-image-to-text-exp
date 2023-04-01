@@ -4,7 +4,6 @@ import cv2
 from PIL import Image
 import json
 import numpy as np
-from torchvision import transforms
 
 
 class ImagesDataset(torch.utils.data.Dataset):
@@ -19,7 +18,6 @@ class ImagesDataset(torch.utils.data.Dataset):
         else:
             self.images = [x for x in sorted(os.listdir(images_base_path)) if x.endswith(".jpg")]
         self.clip_preprocess = clip_preprocess
-        # self.clip_preprocess_raw = transforms.Compose(self.clip_preprocess.transforms[:-1])
         self.images_base_path = images_base_path
         
     def __len__(self):
@@ -29,9 +27,7 @@ class ImagesDataset(torch.utils.data.Dataset):
         image_name = self.images[index]
         image_path = self.images_base_path + image_name
         
-        image = Image.open(image_path)
-        # raw_images = torch.cat([self.clip_preprocess_raw(image).unsqueeze(0)])
-        images = torch.cat([self.clip_preprocess(image).unsqueeze(0)])
+        images = torch.cat([self.clip_preprocess(Image.open(image_path)).unsqueeze(0)])
         ids = [image_name]
         data_dict = {'images':images, 'ids':ids}
 

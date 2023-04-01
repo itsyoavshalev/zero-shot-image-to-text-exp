@@ -8,20 +8,16 @@ import json
 
 def get_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--prediction_path", type=str, default='/mnt/sb/zero-shot-image-to-text-exp/results_2002-222914_coco_zero/results.json') # 627.4043231364843 ############ 518.346154616991, 51.229835882731415 (image of a)
-    # parser.add_argument("--prediction_path", type=str, default='/mnt/sb/zero-shot-image-to-text-exp/results_1502-230824_coco_ours/results.json') # 570.4199414100286 ############### 835.64989393985, 57.9534711420098
+    # parser.add_argument("--prediction_path", type=str, default='/mnt/sb/zero-shot-image-to-text-exp/results_2002-222914_coco_zero/results.json') # 518.346154616991, 51.229835882731415 (image of a)
+    # parser.add_argument("--prediction_path", type=str, default='/mnt/sb/zero-shot-image-to-text-exp/results_1502-230824_coco_ours/results.json') # 835.64989393985, 57.9534711420098
     # parser.add_argument("--prediction_path", type=str, default='/mnt/sb/zero-shot-image-to-text-exp/results_2503-090350/results.json') # 617.1615894011353, 53.57757333423984
     # parser.add_argument("--prediction_path", type=str, default='/mnt/sb/zero-shot-image-to-text-exp/results_2503-174221/results.json') # 74.334
-    # parser.add_argument("--prediction_path", type=str, default='/mnt/sb/zero-shot-image-to-text-exp/results_2503-212601/results.json') # 19.5
-    # parser.add_argument("--prediction_path", type=str, default='/mnt/sb/zero-shot-image-to-text-exp/results_2603-221014/results.json') #167
-    # parser.add_argument("--prediction_path", type=str, default='/mnt/sb/zero-shot-image-to-text-exp/results_2703-222028/results.json') # 563.9300322134804
-    
 
     # parser.add_argument("--prediction_path", type=str, default='/mnt/sb/zero-shot-image-to-text-exp/results_2702-192814_flickr_zero/results.json')
     return parser
 
 if __name__ == '__main__':
-    num_cands = 800
+    num_cands = 51
 
     cli_args = get_parser().parse_args()
 
@@ -31,7 +27,7 @@ if __name__ == '__main__':
 
     print(len(predictions))
 
-    device = "cuda"
+    device = "cpu"
     model_id = "bert-large-cased"
     
     model = BertForMaskedLM.from_pretrained(model_id).to(device)
@@ -44,8 +40,7 @@ if __name__ == '__main__':
     # none - 587.914284249568
     ppls = []
     for tmp_prediction in tqdm(predictions):
-        prediction = tmp_prediction['best_clip_res'].strip()
-        prediction = prediction.lower().capitalize()
+        prediction = 'Image of a ' + tmp_prediction['best_clip_res'].strip().lower()
         # prediction = prediction[1:].strip().capitalize()
         pred_tokens = tokenizer.tokenize(prediction)
         pred_tokens = ["[CLS]"]+pred_tokens+["[SEP]"]

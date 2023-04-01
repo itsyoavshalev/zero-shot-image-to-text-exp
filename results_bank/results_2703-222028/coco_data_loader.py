@@ -19,7 +19,7 @@ class ImagesDataset(torch.utils.data.Dataset):
         else:
             self.images = [x for x in sorted(os.listdir(images_base_path)) if x.endswith(".jpg")]
         self.clip_preprocess = clip_preprocess
-        # self.clip_preprocess_raw = transforms.Compose(self.clip_preprocess.transforms[:-1])
+        self.clip_preprocess_raw = transforms.Compose(self.clip_preprocess.transforms[:-1])
         self.images_base_path = images_base_path
         
     def __len__(self):
@@ -29,10 +29,10 @@ class ImagesDataset(torch.utils.data.Dataset):
         image_name = self.images[index]
         image_path = self.images_base_path + image_name
         
-        image = Image.open(image_path)
-        # raw_images = torch.cat([self.clip_preprocess_raw(image).unsqueeze(0)])
-        images = torch.cat([self.clip_preprocess(image).unsqueeze(0)])
+        im = Image.open(image_path)
+        raw_images = torch.cat([self.clip_preprocess_raw(im).unsqueeze(0)])
+        prep_images = torch.cat([self.clip_preprocess(im).unsqueeze(0)])
         ids = [image_name]
-        data_dict = {'images':images, 'ids':ids}
+        data_dict = {'prep_images':prep_images, 'raw_images':raw_images, 'ids':ids}
 
         return data_dict

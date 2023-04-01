@@ -7,7 +7,7 @@ import numpy as np
 from tqdm import tqdm
 
 print(model_zoo)
-num_cands = 800
+num_cands = 298
 # num_cands = 1598
 is_flickr = False
 
@@ -19,7 +19,7 @@ if is_flickr:
         candidates = json.load(f)
         candidates = candidates[:num_cands]
 else:
-    with open('/mnt/sb/zero-shot-image-to-text-exp/results_2002-222914_coco_zero/results.json', 'r') as f:
+    with open('/mnt/sb/zero-shot-image-to-text-exp/results_1502-230824/results.json', 'r') as f:
         candidates = json.load(f)
         candidates = candidates[:num_cands]
 

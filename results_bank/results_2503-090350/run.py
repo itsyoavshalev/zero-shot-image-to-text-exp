@@ -73,9 +73,6 @@ def run(args, img_path):
         shutil.rmtree(results_base_path)
     os.makedirs(results_base_path, exist_ok=True)
     os.makedirs(results_inputs_base_path, exist_ok=True)
-    [shutil.copyfile(x, results_base_path + x) for x in os.listdir('./') if '.py' in x]
-    [shutil.copyfile(x, results_base_path + x) for x in os.listdir('./model/') if '.py' in x]
-
     for idx, current_data in tqdm(enumerate(dataloader)):
         clip_images = current_data['images'].to(text_generator.device)[0]
         db_item_ids = current_data['ids']

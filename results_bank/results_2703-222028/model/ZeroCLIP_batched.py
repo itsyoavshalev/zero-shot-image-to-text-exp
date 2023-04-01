@@ -7,9 +7,23 @@ import clip
 from PIL import Image
 from datetime import datetime
 import sys
-from test_ret import generate_heatmap
-from CLIP import clip as exp_clip
-from tqdm import tqdm
+
+class TextCLIP(nn.Module):
+    def __init__(self, model):
+        super(TextCLIP, self).__init__()
+        self.model = model
+
+    def forward(self, text):
+        return self.model.encode_text(text)
+
+
+class ImageCLIP(nn.Module):
+    def __init__(self, model):
+        super(ImageCLIP, self).__init__()
+        self.model = model
+
+    def forward(self, image):
+        return self.model.encode_image(image)
 
 def log_info(text, verbose=True):
     if verbose:
@@ -47,12 +61,6 @@ class CLIPTextGenerator:
                  end_factor=1.01,
                  forbidden_factor=20,
                  **kwargs):
-        self.w_hm = 0.5
-        self.w_raw = 1
-        self.model_path = '/mnt/sb/fairness/log 01_11_2023 07:22:49/model_19_429.pt'
-        # self.model_path = None
-        self.use_exp = True
-        self.top_size = 350
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -83,19 +91,12 @@ class CLIPTextGenerator:
             param.requires_grad = False
 
         # Initialize CLIP
-        self.clip_exp, _ = exp_clip.load("ViT-B/32", device=self.device, jit=False)
-        self.clip_raw, self.clip_preprocess = clip.load("ViT-B/32", device=self.device,
+        self.clip, self.clip_preprocess = clip.load("ViT-B/32", device=self.device,
                                                     download_root=clip_checkpoints, jit=False)
-        
-        if self.model_path is not None:
-            checkpoint = torch.load(self.model_path, map_location=self.device)
-            self.clip_exp.load_state_dict(checkpoint['model_state_dict'])
-            self.clip_exp.zero_grad()
-            checkpoint = None
-            torch.cuda.empty_cache()
-            print('clip_exp loaded from checkpoint.')
-
-        # convert_models_to_fp32(self.clip)
+        self.clip_image = ImageCLIP(self.clip)
+        self.clip_image = torch.nn.DataParallel(self.clip_image)
+        self.clip_text = TextCLIP(self.clip)
+        self.clip_text = torch.nn.DataParallel(self.clip_text)
 
         # Init arguments
         self.target_seq_length = target_seq_length
@@ -113,50 +114,48 @@ class CLIPTextGenerator:
         self.ef_idx = 1
         self.forbidden_factor = forbidden_factor
 
-    def get_img_feature(self, model, weights, clip_imgs=None):
-        # with torch.no_grad():
-        image_fts = [model.encode_image(x.unsqueeze(0)) for x in clip_imgs]
+    def get_img_feature(self, img_path, weights):
+        imgs = [Image.open(x) for x in img_path]
+        clip_imgs = [self.clip_preprocess(x).unsqueeze(0).to(self.device) for x in imgs]
 
-        if weights is not None:
-            image_features = sum([x * weights[i] for i, x in enumerate(image_fts)])
-        else:
-            image_features = sum(image_fts)
+        with torch.no_grad():
+            image_fts = [self.clip_image(x) for x in clip_imgs]
 
-        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-        # clip_imgs = torch.stack(clip_imgs)[:, 0]
-        return image_features
+            if weights is not None:
+                image_features = sum([x * weights[i] for i, x in enumerate(image_fts)])
+            else:
+                image_features = sum(image_fts)
 
-    def get_txt_features(self, model, text):
-        clip_texts = exp_clip.tokenize(text).to(self.device)
+            image_features = torch.nn.functional.normalize(image_features, dim=-1)
+            return image_features.detach()
 
-        # with torch.no_grad():
-        text_features = model.encode_text(clip_texts)
+    def get_txt_features(self, text):
+        clip_texts = clip.tokenize(text).to(self.device)
 
-        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-        return text_features
+        with torch.no_grad():
+            text_features = self.clip_text(clip_texts)
 
-    # def get_combined_feature(self, img_path, texts, weights_i, weights_t):
-    #     imgs = [Image.open(x) for x in img_path]
-    #     clip_imgs = [self.clip_preprocess(x).unsqueeze(0).to(self.device) for x in imgs]
-    #     clip_texts = [clip.tokenize(x).to(self.device) for x in texts]
+            text_features = torch.nn.functional.normalize(text_features, dim=-1)
+        return text_features.detach()
 
-    #     with torch.no_grad():
-    #         image_fts = [self.clip.encode_image(x) for x in clip_imgs]
-    #         text_fts = [self.clip.encode_text(x) for x in clip_texts]
+    def get_combined_feature(self, img_path, texts, weights_i, weights_t):
+        imgs = [Image.open(x) for x in img_path]
+        clip_imgs = [self.clip_preprocess(x).unsqueeze(0).to(self.device) for x in imgs]
+        clip_texts = [clip.tokenize(x).to(self.device) for x in texts]
 
-    #         features = sum([x * weights_i[i] for i, x in enumerate(image_fts)])
-    #         if weights_t is not None:
-    #             features += sum([x * weights_t[i] for i, x in enumerate(text_fts)])
+        with torch.no_grad():
+            image_fts = [self.clip.encode_image(x) for x in clip_imgs]
+            text_fts = [self.clip.encode_text(x) for x in clip_texts]
 
-    #         features = features / features.norm(dim=-1, keepdim=True)
-    #         return features.detach()
+            features = sum([x * weights_i[i] for i, x in enumerate(image_fts)])
+            if weights_t is not None:
+                features += sum([x * weights_t[i] for i, x in enumerate(text_fts)])
 
-    def run(self, image_features, image_features_exp, clip_images, cond_text, beam_size):
-        self.image_features_raw = image_features
-        self.image_features_exp = image_features_exp
-        self.clip_images = clip_images
-        self.logit_scale = self.clip_exp.logit_scale.exp()
-        # self.exp_model, _ = exp_clip.load("ViT-B/32", device=self.device, jit=False)
+            features = features / features.norm(dim=-1, keepdim=True)
+            return features.detach()
+
+    def run(self, image_features, cond_text, beam_size):
+        self.image_features = image_features
 
         context_tokens = self.lm_tokenizer.encode(self.context_prefix + cond_text)
 
@@ -265,8 +264,6 @@ class CLIPTextGenerator:
     def shift_context(self, i, context, last_token, context_tokens, probs_before_shift):
         context_delta = [tuple([np.zeros(x.shape).astype("float32") for x in p]) for p in context]
 
-        window_mask = torch.ones_like(context[0][0]).to(self.device)
-
         for i in range(self.num_iterations):
             curr_shift = [tuple([torch.from_numpy(x).requires_grad_(True).to(device=self.device) for x in p_]) for p_ in
                           context_delta]
@@ -293,47 +290,8 @@ class CLIPTextGenerator:
 
             loss.backward()
 
-            # ---------- Weights ----------
-            combined_scores_k = -(ce_loss)
-            combined_scores_c = -(self.clip_scale * torch.stack(clip_losses))
-
-            # minmax
-            if combined_scores_k.shape[0] == 1:
-                tmp_weights_c = tmp_weights_k = torch.ones(*combined_scores_k.shape).to(self.device)
-            else:
-                tmp_weights_k = ((combined_scores_k - combined_scores_k.min())) / (
-                        combined_scores_k.max() - combined_scores_k.min())
-                tmp_weights_c = ((combined_scores_c - combined_scores_c.min())) / (
-                        combined_scores_c.max() - combined_scores_c.min())
-
-            tmp_weights = 0.5 * tmp_weights_k + 0.5 * tmp_weights_c
-            tmp_weights = tmp_weights.view(tmp_weights.shape[0], 1, 1, 1)
-
-            factor = 1
-
             # --------- Specific Gen ---------
-            sep_grads = None
-
-            for b in range(context_tokens.shape[0]):
-                tmp_sep_norms = [[(torch.norm(x.grad[b:(b + 1)] * window_mask[b:(b + 1)]) + 1e-15) for x in p_]
-                                 for p_ in curr_shift]
-
-                # normalize gradients
-                tmp_grad = [tuple([-self.stepsize * factor * (
-                        x.grad[b:(b + 1)] * window_mask[b:(b + 1)] / tmp_sep_norms[i][
-                    j] ** self.grad_norm_factor).data.cpu().numpy()
-                                   for j, x in enumerate(p_)])
-                            for i, p_ in enumerate(curr_shift)]
-                if sep_grads is None:
-                    sep_grads = tmp_grad
-                else:
-                    for l_index in range(len(sep_grads)):
-                        sep_grads[l_index] = list(sep_grads[l_index])
-                        for k_index in range(len(sep_grads[0])):
-                            sep_grads[l_index][k_index] = np.concatenate(
-                                (sep_grads[l_index][k_index], tmp_grad[l_index][k_index]), axis=0)
-                        sep_grads[l_index] = tuple(sep_grads[l_index])
-            final_grads = sep_grads
+            final_grads = self.norm_grad(context, context_tokens, curr_shift)
 
             # --------- update context ---------
             context_delta = list(map(add_context, final_grads, context_delta))
@@ -358,6 +316,34 @@ class CLIPTextGenerator:
 
         return context
 
+    def norm_grad(self, context, context_tokens, curr_shift, ):
+        factor = 1
+        sep_grads = None
+        window_mask = torch.ones_like(context[0][0]).to(self.device)
+
+        for b in range(context_tokens.shape[0]):
+            tmp_sep_norms = [[(torch.norm(x.grad[b:(b + 1)] * window_mask[b:(b + 1)]) + 1e-15) for x in p_]
+                             for p_ in curr_shift]
+
+            # normalize gradients
+            tmp_grad = [tuple([-self.stepsize * factor * (
+                    x.grad[b:(b + 1)] * window_mask[b:(b + 1)] / tmp_sep_norms[i][
+                j] ** self.grad_norm_factor).data.cpu().numpy()
+                               for j, x in enumerate(p_)])
+                        for i, p_ in enumerate(curr_shift)]
+            if sep_grads is None:
+                sep_grads = tmp_grad
+            else:
+                for l_index in range(len(sep_grads)):
+                    sep_grads[l_index] = list(sep_grads[l_index])
+                    for k_index in range(len(sep_grads[0])):
+                        sep_grads[l_index][k_index] = np.concatenate(
+                            (sep_grads[l_index][k_index], tmp_grad[l_index][k_index]), axis=0)
+                    sep_grads[l_index] = tuple(sep_grads[l_index])
+        final_grads = sep_grads
+
+        return final_grads
+
     def update_special_tokens_logits(self, context_tokens, i, logits):
         for beam_id in range(context_tokens.shape[0]):
             for token_idx in set(context_tokens[beam_id][-4:].tolist()):
@@ -379,73 +365,85 @@ class CLIPTextGenerator:
         return logits
 
     def clip_loss(self, probs, context_tokens):
-        for p_ in self.clip_raw.transformer.parameters():
+        for p_ in self.clip.transformer.parameters():
             if p_.grad is not None:
                 p_.grad.data.zero_()
 
-        _, top_indices = probs.topk(self.top_size, -1)
+        top_size = 512
+        top_probs, top_indices = probs.topk(top_size, -1)
+
+        prefix_texts = [self.lm_tokenizer.decode(x, skip_special_tokens=True) for x in context_tokens]
+
+        clip_loss = 0
+        losses = []
+
+        top_texts = []
+        for idx_p in range(probs.shape[0]):
+            prefix_text = prefix_texts[idx_p]
+            for x in top_indices[idx_p]:
+                top_texts.append(prefix_text + self.lm_tokenizer.decode(x))
+
+        text_features = self.get_txt_features(top_texts)#.reshape(probs.size(0), top_size, -1)
+
+        with torch.no_grad():
+            similiraties = (self.image_features @ text_features.T).reshape(probs.size(0), -1)
+            similiraties = similiraties.reshape(probs.size(0), -1)
+            target_probs = nn.functional.softmax(similiraties / self.clip_loss_temperature, dim=-1).detach()
+            target_probs = target_probs.type(torch.float32)
+
+        clip_loss += torch.sum(-(target_probs * torch.log(top_probs)))
+        # for idx_p in range(probs.shape[0]):
+        #     top_texts = []
+        #     prefix_text = prefix_texts[idx_p]
+        #     for x in top_indices[idx_p]:
+        #         top_texts.append(prefix_text + self.lm_tokenizer.decode(x))
+        #     text_features = self.get_txt_features(top_texts)
+        #
+        #     with torch.no_grad():
+        #         similiraties = (self.image_features @ text_features.T)
+        #         target_probs = nn.functional.softmax(similiraties / self.clip_loss_temperature, dim=-1).detach()
+        #         target_probs = target_probs.type(torch.float32)
+        #
+        #     target = torch.zeros_like(probs[idx_p])
+        #     target[top_indices[idx_p]] = target_probs[0]
+        #     target = target.unsqueeze(0)
+        #     cur_clip_loss = torch.sum(-(target * torch.log(probs[idx_p:(idx_p + 1)])))
+        #
+        #     clip_loss += cur_clip_loss
+        #     losses.append(cur_clip_loss)
+
+        return clip_loss, losses
+
+    def clip_loss_old(self, probs, context_tokens):
+        for p_ in self.clip.transformer.parameters():
+            if p_.grad is not None:
+                p_.grad.data.zero_()
+
+        top_size = 512
+        _, top_indices = probs.topk(top_size, -1)
 
         prefix_texts = [self.lm_tokenizer.decode(x).replace(self.lm_tokenizer.bos_token, '') for x in context_tokens]
 
         clip_loss = 0
         losses = []
-        
         for idx_p in range(probs.shape[0]):
             top_texts = []
             prefix_text = prefix_texts[idx_p]
             for x in top_indices[idx_p]:
                 top_texts.append(prefix_text + self.lm_tokenizer.decode(x))
-
-            cur_clip_loss = 0
-            if not self.use_exp:
-                with torch.no_grad():
-                    text_features = self.get_txt_features(self.clip_raw, top_texts)
-            else:
-                text_features = self.get_txt_features(self.clip_exp, top_texts)
-                heatmaps = []
-                logits_per_text = (self.logit_scale * self.image_features_exp @ text_features.t()).t()
-                for y in range(logits_per_text.shape[0]):
-                    tmp_norm_image_relevance = generate_heatmap(logits_per_text[y:(y+1)], self.clip_images.shape[0], self.clip_exp, self.device, True)
-                    heatmaps.append(tmp_norm_image_relevance.detach())
-                
-                heatmaps = torch.cat(heatmaps)
-                heatmaps = heatmaps.expand(heatmaps.shape[0],3, *heatmaps.shape[2:])
-                
-                text_features = text_features.detach()
-                similiraties_exp = []
-                with torch.no_grad():
-                    cropped_images = self.clip_images * heatmaps
-                    cropped_features = self.clip_raw.encode_image(cropped_images)#.float()
-                    cropped_features = cropped_features / cropped_features.norm(dim=-1, keepdim=True)
-                    for tmp_i in range(cropped_features.shape[0]):
-                        tmp_sim = (cropped_features[tmp_i:(tmp_i+1)] @ text_features[tmp_i:(tmp_i+1)].T)
-                        similiraties_exp.append(tmp_sim)
-                    similiraties_exp = torch.cat(similiraties_exp)[:, 0]
-                    target_probs = nn.functional.softmax(similiraties_exp / self.clip_loss_temperature, dim=-1).detach()
-                    target_probs = target_probs.type(torch.float32)
-                    
-                    similiraties_exp = None
-                    cropped_images = None
-                    heatmaps = None
-                    cropped_features = None
-
-                target = torch.zeros_like(probs[idx_p])
-                target[top_indices[idx_p]] = target_probs
-                target = target.unsqueeze(0)
-                cur_clip_loss = torch.sum(-(target * torch.log(probs[idx_p:(idx_p + 1)])))
+            text_features = self.get_txt_features(top_texts)
 
             with torch.no_grad():
-                similiraties = (self.image_features_raw @ text_features.T.detach())
+                similiraties = (self.image_features @ text_features.T)
                 target_probs = nn.functional.softmax(similiraties / self.clip_loss_temperature, dim=-1).detach()
                 target_probs = target_probs.type(torch.float32)
 
             target = torch.zeros_like(probs[idx_p])
             target[top_indices[idx_p]] = target_probs[0]
             target = target.unsqueeze(0)
-            cur_clip_loss_raw = torch.sum(-(target * torch.log(probs[idx_p:(idx_p + 1)])))
+            cur_clip_loss = torch.sum(-(target * torch.log(probs[idx_p:(idx_p + 1)])))
 
-            tmp_cur_loss = self.w_hm*cur_clip_loss + self.w_raw*cur_clip_loss_raw
-            clip_loss += tmp_cur_loss
-            losses.append(tmp_cur_loss)
+            clip_loss += cur_clip_loss
+            losses.append(cur_clip_loss)
 
         return clip_loss, losses

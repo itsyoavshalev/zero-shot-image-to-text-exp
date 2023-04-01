@@ -1,9 +1,4 @@
 .idea
-__pycache__/data_loader.cpython-38.pyc
-__pycache__/test_ret.cpython-38.pyc
-model/__pycache__/__init__.cpython-38.pyc
-model/__pycache__/ZeroCLIP_batched.cpython-38.pyc
-model/__pycache__/ZeroCLIP.cpython-38.pyc
 clip_checkpoints/*
-__pycache__/coco_data_loader.cpython-38.pyc
-__pycache__/flickr_data_loader.cpython-38.pyc
+html/*
+*.pyc

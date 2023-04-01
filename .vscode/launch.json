@@ -12,7 +12,7 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
-                "--caption_img_path", "example_images/captions/COCO_val2014_000000097017.jpg"
+                // "--caption_img_path", "example_images/captions/COCO_val2014_000000097017.jpg"
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "0"

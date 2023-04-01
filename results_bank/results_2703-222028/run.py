@@ -74,19 +74,19 @@ def run(args, img_path):
     os.makedirs(results_base_path, exist_ok=True)
     os.makedirs(results_inputs_base_path, exist_ok=True)
     [shutil.copyfile(x, results_base_path + x) for x in os.listdir('./') if '.py' in x]
-    [shutil.copyfile(x, results_base_path + x) for x in os.listdir('./model/') if '.py' in x]
 
     for idx, current_data in tqdm(enumerate(dataloader)):
-        clip_images = current_data['images'].to(text_generator.device)[0]
+        clip_images_prep = current_data['prep_images'].to(text_generator.device)[0]
+        clip_images_raw = current_data['raw_images'].to(text_generator.device)[0]
         db_item_ids = current_data['ids']
         with torch.no_grad():
-            image_features = text_generator.get_img_feature(text_generator.clip_raw, None, clip_imgs=clip_images)
-        image_features_exp = text_generator.get_img_feature(text_generator.clip_exp, None, clip_imgs=clip_images)
-        captions = text_generator.run(image_features, image_features_exp, clip_images, args.cond_text, beam_size=args.beam_size)
+            image_features_prep = text_generator.get_img_feature(text_generator.clip_raw, None, clip_imgs=clip_images_prep)
+        image_features_exp = text_generator.get_img_feature(text_generator.clip_exp, None, clip_imgs=clip_images_prep)
+        captions = text_generator.run(image_features_prep, image_features_exp, clip_images_raw, args.cond_text, beam_size=args.beam_size)
 
         encoded_captions = [text_generator.clip_raw.encode_text(clip.tokenize(c).to(text_generator.device)) for c in captions]
         encoded_captions = [x / x.norm(dim=-1, keepdim=True) for x in encoded_captions]
-        best_clip_idx = (torch.cat(encoded_captions) @ image_features.t()).squeeze().argmax().item()
+        best_clip_idx = (torch.cat(encoded_captions) @ image_features_prep.t()).squeeze().argmax().item()
 
         print(captions)
         print('best clip:', args.cond_text + captions[best_clip_idx])

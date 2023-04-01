@@ -10,6 +10,7 @@ import sys
 from test_ret import generate_heatmap
 from CLIP import clip as exp_clip
 from tqdm import tqdm
+from torchvision import transforms
 
 def log_info(text, verbose=True):
     if verbose:
@@ -47,8 +48,7 @@ class CLIPTextGenerator:
                  end_factor=1.01,
                  forbidden_factor=20,
                  **kwargs):
-        self.w_hm = 0.5
-        self.w_raw = 1
+        
         self.model_path = '/mnt/sb/fairness/log 01_11_2023 07:22:49/model_19_429.pt'
         # self.model_path = None
         self.use_exp = True
@@ -414,7 +414,8 @@ class CLIPTextGenerator:
                 text_features = text_features.detach()
                 similiraties_exp = []
                 with torch.no_grad():
-                    cropped_images = self.clip_images * heatmaps
+                    a=transforms.Compose([transforms.Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711))])
+                    cropped_images = a(self.clip_images[0]).unsqueeze(0) * heatmaps
                     cropped_features = self.clip_raw.encode_image(cropped_images)#.float()
                     cropped_features = cropped_features / cropped_features.norm(dim=-1, keepdim=True)
                     for tmp_i in range(cropped_features.shape[0]):
@@ -444,7 +445,7 @@ class CLIPTextGenerator:
             target = target.unsqueeze(0)
             cur_clip_loss_raw = torch.sum(-(target * torch.log(probs[idx_p:(idx_p + 1)])))
 
-            tmp_cur_loss = self.w_hm*cur_clip_loss + self.w_raw*cur_clip_loss_raw
+            tmp_cur_loss = 0.5*cur_clip_loss + cur_clip_loss_raw
             clip_loss += tmp_cur_loss
             losses.append(tmp_cur_loss)
 
