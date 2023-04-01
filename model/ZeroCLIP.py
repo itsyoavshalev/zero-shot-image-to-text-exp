@@ -10,6 +10,7 @@ import sys
 from test_ret import generate_heatmap
 from CLIP import clip as exp_clip
 from tqdm import tqdm
+import cv2
 
 def log_info(text, verbose=True):
     if verbose:
@@ -46,13 +47,19 @@ class CLIPTextGenerator:
                  end_token='.',
                  end_factor=1.01,
                  forbidden_factor=20,
+                 w_hm = 3,
+                 w_raw = 0.1,
+                 model_path = '/mnt/sb/fairness/zz_log 06_11_2022 23_21_52/model_1_1000.pt',
+                 use_exp = True,
+                 top_size = 350,
+                 dump_hm = False,
                  **kwargs):
-        self.w_hm = 0.5
-        self.w_raw = 1
-        self.model_path = '/mnt/sb/fairness/log 01_11_2023 07:22:49/model_19_429.pt'
-        # self.model_path = None
-        self.use_exp = True
-        self.top_size = 350
+        self.w_hm = w_hm
+        self.w_raw = w_raw
+        self.model_path = model_path
+        self.use_exp = use_exp
+        self.top_size = top_size
+        self.dump_hm = dump_hm
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -151,10 +158,11 @@ class CLIPTextGenerator:
     #         features = features / features.norm(dim=-1, keepdim=True)
     #         return features.detach()
 
-    def run(self, image_features, image_features_exp, clip_images, cond_text, beam_size):
+    def run(self, image_features, image_features_exp, clip_images, cond_text, beam_size, clip_images_debug=None):
         self.image_features_raw = image_features
         self.image_features_exp = image_features_exp
         self.clip_images = clip_images
+        self.clip_images_debug = clip_images_debug
         self.logit_scale = self.clip_exp.logit_scale.exp()
         # self.exp_model, _ = exp_clip.load("ViT-B/32", device=self.device, jit=False)
 
@@ -377,6 +385,13 @@ class CLIPTextGenerator:
                 logits[beam_id, token_idx] /= factor
 
         return logits
+    
+    def show_cam_on_image(self, img, mask):
+        heatmap = cv2.applyColorMap(np.uint8(255 * mask.permute(1,2,0).cpu().numpy()), cv2.COLORMAP_JET)
+        heatmap = np.float32(heatmap) / 255
+        cam = heatmap + np.float32(img[0].permute(1,2,0).numpy())
+        cam = cam / np.max(cam)
+        return cam
 
     def clip_loss(self, probs, context_tokens):
         for p_ in self.clip_raw.transformer.parameters():
@@ -423,6 +438,19 @@ class CLIPTextGenerator:
                     similiraties_exp = torch.cat(similiraties_exp)[:, 0]
                     target_probs = nn.functional.softmax(similiraties_exp / self.clip_loss_temperature, dim=-1).detach()
                     target_probs = target_probs.type(torch.float32)
+
+                    if self.dump_hm:
+                        with torch.no_grad():
+                            max_idx = target_probs.argmax().item()
+                            max_sentence = top_texts[max_idx]
+                            heatmap = heatmaps[max_idx]
+                            cv2.imwrite('debug_raw.jpg', np.uint8(255*np.float32(self.clip_images_debug[0].permute(1,2,0).cpu().numpy())))
+                            combined_image = self.show_cam_on_image(self.clip_images_debug, heatmap)
+                            combined_image = np.uint8(255 * combined_image)
+                            combined_image = cv2.cvtColor(np.array(combined_image), cv2.COLOR_RGB2BGR)
+                            cv2.imwrite('debug_combined.jpg', combined_image)
+                            print(max_sentence)
+
                     
                     similiraties_exp = None
                     cropped_images = None

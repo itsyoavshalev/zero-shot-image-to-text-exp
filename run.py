@@ -36,6 +36,16 @@ def get_args():
     parser.add_argument("--forbidden_factor", type=float, default=20, help="Factor to decrease forbidden tokens")
     parser.add_argument("--beam_size", type=int, default=5)
 
+    parser.add_argument("--w_hm", type=int, default=1)
+    parser.add_argument("--w_raw", type=float, default=0)
+    parser.add_argument("--model_path", type=str, default='/mnt/sb/fairness/zz_log 06_11_2022 23_21_52/model_1_1000.pt')
+    parser.add_argument("--top_size", type=int, default=350)
+
+    parser.add_argument('--use_exp', dest='use_exp', action='store_true')
+    parser.add_argument('--dump_hm', dest='dump_hm', action='store_true')
+    parser.set_defaults(use_exp=True)
+    parser.set_defaults(dump_hm=False)
+
     parser.add_argument("--multi_gpu", action="store_true")
 
     parser.add_argument('--run_type',
@@ -72,17 +82,19 @@ def run(args, img_path):
     if os.path.isdir(results_base_path):
         shutil.rmtree(results_base_path)
     os.makedirs(results_base_path, exist_ok=True)
+    os.makedirs(results_base_path + './model/', exist_ok=True)
     os.makedirs(results_inputs_base_path, exist_ok=True)
     [shutil.copyfile(x, results_base_path + x) for x in os.listdir('./') if '.py' in x]
-    [shutil.copyfile(x, results_base_path + x) for x in os.listdir('./model/') if '.py' in x]
+    [shutil.copyfile('./model/' + x, results_base_path + './model/' + x) for x in os.listdir('./model/') if '.py' in x]
 
     for idx, current_data in tqdm(enumerate(dataloader)):
         clip_images = current_data['images'].to(text_generator.device)[0]
+        clip_images_debug = current_data['images_debug'][0]
         db_item_ids = current_data['ids']
         with torch.no_grad():
             image_features = text_generator.get_img_feature(text_generator.clip_raw, None, clip_imgs=clip_images)
         image_features_exp = text_generator.get_img_feature(text_generator.clip_exp, None, clip_imgs=clip_images)
-        captions = text_generator.run(image_features, image_features_exp, clip_images, args.cond_text, beam_size=args.beam_size)
+        captions = text_generator.run(image_features, image_features_exp, clip_images, args.cond_text, beam_size=args.beam_size, clip_images_debug=clip_images_debug)
 
         encoded_captions = [text_generator.clip_raw.encode_text(clip.tokenize(c).to(text_generator.device)) for c in captions]
         encoded_captions = [x / x.norm(dim=-1, keepdim=True) for x in encoded_captions]
